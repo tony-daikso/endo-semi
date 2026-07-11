@@ -3,18 +3,18 @@
 # pipeline up in the order of §9 (validate each stage before enabling the next).
 
 data:
-  yaml: data/label-data/v3_2_1/data.yaml   # nc=1, names=[polyp]
+  yaml: data/label-data/v3_2_1_correction/data.yaml   # nc=1, names=[polyp]
   nc: 1
-  split_csv: data/label-data/v3_2_1/split.csv
+  split_csv: data/label-data/v3_2_1_correction/split.csv
   label_ratio: 0.10          # §9.8 — headline comparison point; sweep later
   ssl_split_seed: 42
   # Split is patient-level (by split.csv patient_id) so the same patient never
   # straddles labeled/unlabeled — prevents optimistic leakage.
-  labeled_list: data/label-data/v3_2_1/labeled_10.txt    # written by prepare_ssl_split.py
-  unlabeled_list: data/label-data/v3_2_1/unlabeled_10.txt
+  labeled_list: data/label-data/v3_2_1_correction/labeled_10.txt    # written by prepare_ssl_split.py
+  unlabeled_list: data/label-data/v3_2_1_correction/unlabeled_10.txt
 
 model:
-  arch: yolo26            # backbone/neck/head
+  arch: yolo26s.yaml            # backbone/neck/head
   weights: null           # null = random init per net (f1, f2 get different seeds)
   init_seeds: [1, 2]      # two independent inits, no weight sharing (§1)
   imgsz: 640
@@ -68,14 +68,14 @@ temporal:                  # §7 ByteTrack correction
 
 train:
   epochs: 100
-  batch_labeled: 8
-  batch_unlabeled: 8       # mini-batch pairs (labeled + unlabeled) per step
+  batch_labeled: 64
+  batch_unlabeled: 64       # mini-batch pairs (labeled + unlabeled) per step
   burn_in_epochs: 10       # supervised-only warmup before pseudo-labels kick in
   optimizer: SGD
   lr0: 0.01
-  device: mps          # cpu | mps | 0 (cuda)
-  num_workers: 4
-  project: runs
+  device: 0          # cpu | mps | 0 (cuda)
+  num_workers: 8
+  project: /datadrive/endo-semi/runs
   name: endo_semi_10pct
 
 eval:                      # §8 size-stratified metrics

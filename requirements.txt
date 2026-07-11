@@ -1,6 +1,6 @@
 # Core — pin exact versions once YOLO26 ships in ultralytics.
 ultralytics>=8.3.0        # YOLO26 backbone/head, DFL box regression, Mosaic
-torch>=2.2
+torch==2.10.0
 torchvision>=0.17
 numpy>=1.24
 scipy>=1.10               # Hungarian matching (linear_sum_assignment) for §4
