@@ -103,10 +103,11 @@ def collate(samples: list[dict]) -> dict:
 
 def build_loader(list_txt: str | Path, imgsz: int, batch_size: int,
                  with_labels: bool = True, shuffle: bool = True,
-                 num_workers: int = 4, limit: int | None = None) -> DataLoader:
+                 num_workers: int = 4, limit: int | None = None,
+                 drop_last: bool = True) -> DataLoader:
     ds = PolypDataset(list_txt, imgsz=imgsz, with_labels=with_labels, limit=limit)
     return DataLoader(ds, batch_size=batch_size, shuffle=shuffle,
-                      num_workers=num_workers, collate_fn=collate, drop_last=True)
+                      num_workers=num_workers, collate_fn=collate, drop_last=drop_last)
 
 
 def move_batch(batch: dict, device: str) -> dict:

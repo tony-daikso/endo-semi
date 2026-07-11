@@ -108,7 +108,14 @@ step is a switch in the config so you can validate incrementally:
 | 5 | Mutual learning on labeled data | interface only |
 | 6 | Combined objective + weight tuning | wired for step 1 |
 | 7 | ByteTrack temporal correction | scaffolded + unit-tested |
-| 8 | Size-stratified evaluation | interface only |
+| 8 | Size-stratified evaluation | **overall metrics done**; per-size split TODO |
+
+**Validation metrics** (`engine/evaluator.py::DetectionEvaluator`): during
+training both nets are evaluated on the held-out val split every `eval.interval`
+epochs — precision / recall / mAP@50 / mAP@50-95 via ultralytics' `DetMetrics`,
+so numbers match a stock `YOLO.val()` and the baseline. The better net is saved
+as `best.pt` (selected by `eval.select_by`). Loss alone can't tell you if SSL
+beats the baseline — cross-supervision loss only measures net-to-net agreement.
 
 **Step 1 is implemented and verified**: `models/dual_yolo.py`,
 `data/polyp_dataset.py`, `losses/cross_supervision.py`, `engine/trainer.py`,

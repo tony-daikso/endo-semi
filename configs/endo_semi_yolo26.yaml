@@ -78,6 +78,10 @@ train:
   project: /datadrive/endo-semi/runs
   name: endo_semi_10pct
 
-eval:                      # §8 size-stratified metrics
-  size_bins_px2: [1024, 4096, 16384]   # small / medium / large lesion area cutoffs
+eval:                      # validation metrics
+  interval: 1              # run val every N epochs (and always on the last)
+  conf: 0.001             # low floor -> full PR curve (matches YOLO.val)
+  eval_batch: 16
+  select_by: map50         # which net's metric picks best.pt: map50 | recall | fitness
+  size_bins_px2: [1024, 4096, 16384]   # §8 small / medium / large area cutoffs
   metrics: [map50, map5095, recall, precision]

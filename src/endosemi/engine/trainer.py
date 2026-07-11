@@ -21,14 +21,27 @@ import itertools
 from pathlib import Path
 
 import torch
+import yaml
 
 from ..config import Cfg
 from ..models import DualYOLO26, build_hyp
 from ..data import build_loader, move_batch
 from ..losses.cross_supervision import cross_supervision_loss
+from .evaluator import DetectionEvaluator
 from ..utils.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _resolve_val_list(cfg: Cfg) -> str | None:
+    """Absolute path to val.txt from the dataset data.yaml (path + val)."""
+    try:
+        doc = yaml.safe_load(Path(cfg["data"]["yaml"]).read_text())
+        val = Path(doc["val"])
+        return str(val if val.is_absolute() else Path(doc["path"]) / val)
+    except Exception as exc:  # pragma: no cover - defensive
+        log.warning("could not resolve val list: %s", exc)
+        return None
 
 
 class SSLTrainer:
@@ -58,11 +71,29 @@ class SSLTrainer:
             with_labels=False, shuffle=True,
             num_workers=cfg.get_path("train.num_workers", 4), limit=limit)
 
+        # validation
+        nw = cfg.get_path("train.num_workers", 4)
+        val_list = _resolve_val_list(cfg)
+        self.val_loader = None
+        if val_list and Path(val_list).exists():
+            self.val_loader = build_loader(
+                val_list, self.imgsz, cfg.get_path("eval.eval_batch", 16),
+                with_labels=True, shuffle=False, num_workers=nw,
+                limit=limit, drop_last=False)
+            self.evaluator = DetectionEvaluator(
+                self.imgsz, self.device, conf=cfg.get_path("eval.conf", 0.001))
+            self.eval_interval = cfg.get_path("eval.interval", 1)
+            self.select_by = cfg.get_path("eval.select_by", "map50")
+        else:
+            log.warning("val list not found (%s) — training without validation metrics", val_list)
+        self.best_metric = -1.0
+
         params = list(self.f1.parameters()) + list(self.f2.parameters())
         self.optimizer = torch.optim.SGD(
             params, lr=cfg["train"]["lr0"], momentum=0.9, weight_decay=5e-4)
-        log.info("Trainer ready | device=%s labeled_batches=%d unlabeled_batches=%d",
-                 self.device, len(self.labeled), len(self.unlabeled))
+        log.info("Trainer ready | device=%s labeled_batches=%d unlabeled_batches=%d val=%s",
+                 self.device, len(self.labeled), len(self.unlabeled),
+                 len(self.val_loader) if self.val_loader else "off")
 
     # -- one optimizer step --------------------------------------------------
     def train_step(self, labeled_batch, unlabeled_batch, epoch: int) -> dict:
@@ -104,6 +135,22 @@ class SSLTrainer:
         logs["L_total"] = float(total.detach())
         return logs
 
+    # -- validation ----------------------------------------------------------
+    @torch.no_grad()
+    def validate(self, epoch: int) -> dict | None:
+        """Evaluate BOTH nets on val; log metrics; return the better net's stats
+        tagged with which net won (used to pick best.pt)."""
+        if self.val_loader is None:
+            return None
+        m1 = self.evaluator.evaluate(self.f1, self.val_loader)
+        m2 = self.evaluator.evaluate(self.f2, self.val_loader)
+        for tag, m in (("f1", m1), ("f2", m2)):
+            log.info("epoch %d val %s | mAP50=%.4f mAP50-95=%.4f P=%.4f R=%.4f",
+                     epoch, tag, m["map50"], m["map5095"], m["precision"], m["recall"])
+        best_tag, best = ("f1", m1) if m1[self.select_by] >= m2[self.select_by] else ("f2", m2)
+        best = dict(best); best["net"] = best_tag
+        return best
+
     # -- full training -------------------------------------------------------
     def fit(self) -> None:
         epochs = self.cfg["train"]["epochs"]
@@ -115,11 +162,30 @@ class SSLTrainer:
                     msg = " ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
                                    for k, v in logs.items())
                     log.info("epoch %d/%d it %d | %s", epoch, epochs, it, msg)
-            self.save(epoch)
+
+            self.save(epoch)   # always keep *_last.pt
+
+            last = epoch == epochs - 1
+            if self.val_loader is not None and (last or epoch % self.eval_interval == 0):
+                best = self.validate(epoch)
+                if best and best[self.select_by] > self.best_metric:
+                    self.best_metric = best[self.select_by]
+                    self._save_best(epoch, best)
 
     def save(self, epoch: int) -> None:
-        out = Path(self.cfg["train"]["project"]) / self.cfg["train"]["name"]
-        out.mkdir(parents=True, exist_ok=True)
+        out = self._out_dir()
         for name, net in (("f1", self.f1), ("f2", self.f2)):
             torch.save({"model": net.model, "epoch": epoch}, out / f"{name}_last.pt")
-        log.info("saved checkpoints to %s", out)
+        log.info("saved last checkpoints to %s", out)
+
+    def _save_best(self, epoch: int, best: dict) -> None:
+        out = self._out_dir()
+        net = self.f1 if best["net"] == "f1" else self.f2
+        torch.save({"model": net.model, "epoch": epoch, "metrics": best}, out / "best.pt")
+        log.info("new best: %s %s=%.4f (epoch %d) -> best.pt",
+                 best["net"], self.select_by, best[self.select_by], epoch)
+
+    def _out_dir(self) -> Path:
+        out = Path(self.cfg["train"]["project"]) / self.cfg["train"]["name"]
+        out.mkdir(parents=True, exist_ok=True)
+        return out
