@@ -29,6 +29,7 @@ from ..data import build_loader, move_batch
 from ..losses.cross_supervision import cross_supervision_loss
 from .evaluator import DetectionEvaluator
 from ..utils.logging import get_logger
+from ..utils.history import CSVLogger
 
 log = get_logger(__name__)
 
@@ -138,8 +139,8 @@ class SSLTrainer:
     # -- validation ----------------------------------------------------------
     @torch.no_grad()
     def validate(self, epoch: int) -> dict | None:
-        """Evaluate BOTH nets on val; log metrics; return the better net's stats
-        tagged with which net won (used to pick best.pt)."""
+        """Evaluate BOTH nets on val; log metrics; return {'f1','f2','best'}
+        where 'best' is the better net's stats tagged with which net won."""
         if self.val_loader is None:
             return None
         m1 = self.evaluator.evaluate(self.f1, self.val_loader)
@@ -149,15 +150,21 @@ class SSLTrainer:
                      epoch, tag, m["map50"], m["map5095"], m["precision"], m["recall"])
         best_tag, best = ("f1", m1) if m1[self.select_by] >= m2[self.select_by] else ("f2", m2)
         best = dict(best); best["net"] = best_tag
-        return best
+        return {"f1": m1, "f2": m2, "best": best}
 
     # -- full training -------------------------------------------------------
     def fit(self) -> None:
         epochs = self.cfg["train"]["epochs"]
+        history = CSVLogger(self._out_dir() / "results.csv")
         for epoch in range(epochs):
             u_iter = itertools.cycle(self.unlabeled)   # unlabeled pool paired to labeled
+            agg: dict[str, float] = {}
+            n_steps = 0
             for it, lb in enumerate(self.labeled):
                 logs = self.train_step(lb, next(u_iter), epoch)
+                for k, v in logs.items():
+                    agg[k] = agg.get(k, 0.0) + v
+                n_steps += 1
                 if it % 10 == 0:
                     msg = " ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
                                    for k, v in logs.items())
@@ -165,12 +172,22 @@ class SSLTrainer:
 
             self.save(epoch)   # always keep *_last.pt
 
+            # epoch-average training losses
+            row = {"epoch": epoch}
+            row.update({f"train/{k}": agg[k] / max(n_steps, 1) for k in agg})
+
             last = epoch == epochs - 1
             if self.val_loader is not None and (last or epoch % self.eval_interval == 0):
-                best = self.validate(epoch)
-                if best and best[self.select_by] > self.best_metric:
-                    self.best_metric = best[self.select_by]
-                    self._save_best(epoch, best)
+                res = self.validate(epoch)
+                for tag in ("f1", "f2"):
+                    for k in ("map50", "map5095", "precision", "recall"):
+                        row[f"val_{tag}/{k}"] = res[tag][k]
+                row["best_net"] = res["best"]["net"]
+                if res["best"][self.select_by] > self.best_metric:
+                    self.best_metric = res["best"][self.select_by]
+                    self._save_best(epoch, res["best"])
+
+            history.log(row)   # one row per epoch -> results.csv
 
     def save(self, epoch: int) -> None:
         out = self._out_dir()
