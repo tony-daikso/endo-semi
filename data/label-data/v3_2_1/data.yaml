@@ -1,0 +1,6 @@
+path: /Users/tony.tu/Desktop/戴承智慧/polyp/yolo_data/od/v3_2_1
+train: train.txt
+val: val.txt
+
+nc: 1
+names: ['polyp']

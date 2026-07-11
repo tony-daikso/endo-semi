@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Training artifacts
+runs/
+*.pt
+*.onnx
+wandb/
+
+# SSL split outputs (regenerate with scripts/prepare_ssl_split.py)
+data/**/labeled_*.txt
+data/**/unlabeled_*.txt
+
+# Data blobs — tracked out of band, not in git
+data/**/images/
+data/**/labels/
+data/**/image_label_vis/
+data/unlabel-video/*.MOV
+data/unlabel-video/*.mp4
+
+# OS
+.DS_Store

@@ -1,0 +1,17 @@
+# Core — pin exact versions once YOLO26 ships in ultralytics.
+ultralytics>=8.3.0        # YOLO26 backbone/head, DFL box regression, Mosaic
+torch>=2.2
+torchvision>=0.17
+numpy>=1.24
+scipy>=1.10               # Hungarian matching (linear_sum_assignment) for §4
+opencv-python>=4.9        # video decode for §7
+pyyaml>=6.0
+pandas>=2.0               # split.csv handling
+tqdm>=4.66
+
+# Tracking (§7 spatiotemporal correction). ByteTrack ships inside ultralytics
+# (bytetrack.yaml); this is the standalone fallback.
+# lap>=0.4                 # linear assignment used by ByteTrack
+
+# Dev
+pytest>=8.0

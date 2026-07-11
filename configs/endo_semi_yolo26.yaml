@@ -1,0 +1,83 @@
+# Endo-SemiS → YOLO26 semi-supervised polyp detection config.
+# Each block maps to a spec section; component_* flags let you bring the
+# pipeline up in the order of §9 (validate each stage before enabling the next).
+
+data:
+  yaml: data/label-data/v3_2_1/data.yaml   # nc=1, names=[polyp]
+  nc: 1
+  split_csv: data/label-data/v3_2_1/split.csv
+  label_ratio: 0.10          # §9.8 — headline comparison point; sweep later
+  ssl_split_seed: 42
+  # Split is patient-level (by split.csv patient_id) so the same patient never
+  # straddles labeled/unlabeled — prevents optimistic leakage.
+  labeled_list: data/label-data/v3_2_1/labeled_10.txt    # written by prepare_ssl_split.py
+  unlabeled_list: data/label-data/v3_2_1/unlabeled_10.txt
+
+model:
+  arch: yolo26            # backbone/neck/head
+  weights: null           # null = random init per net (f1, f2 get different seeds)
+  init_seeds: [1, 2]      # two independent inits, no weight sharing (§1)
+  imgsz: 640
+  mc_dropout:
+    enable: true          # insert dropout in detection head (§1, §3.2)
+    p: 0.1
+    K: 5                  # forward passes for cls/objectness epistemic uncertainty
+
+# ---- SSL component switches (§9 build order) --------------------------------
+components:
+  cross_supervision: true     # §2  — always on
+  uncertainty_filter: true    # §3  — DFL + MC-Dropout gating of pseudo-labels
+  joint_pseudo: true          # §4  — IoU-matched fused pseudo-labels
+  mutual_learning: true       # §5  — labeled-data feature/logit alignment
+  temporal_correction: false  # §7  — offline/video only, not in the training loop
+
+uncertainty:               # §3.2 / §3.3
+  alpha: 0.5               # U_box = alpha*U_cls + (1-alpha)*U_dfl
+  conf_thresh: 0.25        # NMS confidence floor before boxes become pseudo-labels
+  iou_thresh_nms: 0.65
+  threshold:
+    mode: batch            # 'batch' | 'window' | 'image' — §3.3 caveat: NOT 'image'
+    window_size: 512       # running window of recent box uncertainties (mode=window)
+    strict_factor: 0.5     # unmatched single-network boxes use strict_factor * T (§4)
+
+matching:                  # §4
+  iou_thresh: 0.5
+  algorithm: hungarian     # 'hungarian' | 'greedy'
+
+loss:                      # §6 total objective weights
+  w_cross: 0.5
+  w_mutual: 0.5
+  w_unlabeled_cross: 0.5
+  mutual:                  # §5 sub-weights
+    ssim: 1.0
+    kl: 0.5
+    box_mse: 2.0
+
+augment:                   # §3.1
+  weak: [flip, scale, crop]
+  strong: [brightness, blur, noise]     # applied on top of weak view
+  mosaic: true             # detection-native alternative to CutMix (§3.1)
+  copy_paste:              # §8 — apply as part of the WEAK branch (geometry) only
+    enable: true
+    prob: 0.3
+
+temporal:                  # §7 ByteTrack correction
+  tracker: bytetrack.yaml
+  fn_interpolation: kalman # 'linear' | 'kalman' (ByteTrack's own predicted state)
+  fp_suppress_isolated: true
+
+train:
+  epochs: 100
+  batch_labeled: 8
+  batch_unlabeled: 8       # mini-batch pairs (labeled + unlabeled) per step
+  burn_in_epochs: 10       # supervised-only warmup before pseudo-labels kick in
+  optimizer: SGD
+  lr0: 0.01
+  device: mps          # cpu | mps | 0 (cuda)
+  num_workers: 4
+  project: runs
+  name: endo_semi_10pct
+
+eval:                      # §8 size-stratified metrics
+  size_bins_px2: [1024, 4096, 16384]   # small / medium / large lesion area cutoffs
+  metrics: [map50, map5095, recall, precision]
